@@ -4,7 +4,7 @@
 #rules{width:min(680px,94vw)}.lessons{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px}figure{margin:0;padding:12px;background:#faf9f4}figure svg{display:block;width:min(100%,185px);margin:10px auto}figcaption{font-size:14px}.count{position:absolute;z-index:2;font-size:clamp(18px,4vw,42px);font-weight:900;color:#171717;text-shadow:0 0 4px white;background:#fffc;line-height:1;padding:2px;pointer-events:none}.avatar{border-radius:0}#voice:not(:empty){margin:16px 0;padding:14px;background:#fff;border-left:5px solid var(--speaker);display:grid;grid-template-columns:54px 1fr;gap:2px 12px}#voice .avatar{grid-row:span 2;width:54px;height:54px}#voice p{margin:0;overflow-wrap:anywhere}</style>
 <header><b><i class="mark"></i>벽바둑 클럽</b><nav class="tools"><button onclick="rules.showModal()">규칙 · 튜토리얼</button><button onclick="settings.showModal()">API 설정</button></nav></header>
 <main><section><h1>벽바둑 2</h1><div class="row"><span id="status" aria-live="polite"></span><strong id="clock"></strong></div><div id="board" class="board"></div><div id="actions" class="tools"></div><section id="voice" aria-live="polite"></section></section><aside class="side"><div class="panel"><div class="row"><h2>참가자</h2><button onclick="editor.showModal()">NPC 관리</button></div><div id="players"></div></div><div class="panel"><h2>대국 설정</h2><label>대국 인원<select id="mode"><option value="3">3인 모드</option><option value="2">2인 모드</option></select></label><label>NPC 난이도<select id="difficulty"><option>쉬움</option><option selected>보통</option><option>어려움</option></select></label><div id="selectors"></div><label><input id="timed" type="checkbox"> 턴당 90초 제한</label><button id="start" class="primary">대국 시작</button></div><div class="panel"><h2>대국 기록</h2><ol id="logs"><li>상대를 선택한 뒤 대국을 시작한다.</li></ol></div></aside></main>
-<dialog id="settings"><h2>Gemini 연결</h2><p>각 플레이어의 키로 프로필과 대국 상황을 Google에 전송해 대사를 생성한다. 키는 이 페이지를 닫거나 새로고침하면 삭제된다.</p><label>API 키<input type="password" id="key" autocomplete="off"></label><label>모델 ID<input id="model" value="gemini-2.5-flash"></label><button onclick="settings.close()">완료</button></dialog>
+<dialog id="settings"><h2>API 설정</h2><label>공급자<select id="provider"><option value="vertex">Google Vertex AI · API 키</option><option value="studio">Google AI Studio</option><option value="openai">OpenAI</option><option value="router">OpenRouter</option></select></label><label>API 키<input type="password" id="key" autocomplete="off"></label><label>모델 ID (선택 또는 직접 입력)<input id="model" list="models"></label><datalist id="models"></datalist><p>키는 이 브라우저에 저장된다. 프로필과 대국 상황은 선택한 공급자에 전송한다.</p><button id="testApi">연결 테스트</button> <button onclick="settings.close()">완료</button><p id="apiResult" role="status"></p></dialog>
 <dialog id="editor"><h2>NPC 관리</h2><label>편집할 캐릭터<select id="edit"></select></label><label>이름<input id="nm" maxlength="60"></label><label>프로필 프롬프트<textarea id="promptText"></textarea></label><label>프로필 사진<input type="file" accept="image/*" id="photo"></label><label>플레이 성향<select id="stylePick"><option>자동</option><option>공격형</option><option>수비형</option><option>확장형</option></select></label><div class="tools"><button id="save" class="primary">저장</button><button id="backup">전체 백업</button><button onclick="restore.click()">백업 불러오기</button><input id="restore" hidden type="file" accept=".json"><button onclick="editor.close()">닫기</button></div><p id="notice" role="status"></p></dialog>
 <dialog id="rules"><h2>규칙 · 튜토리얼</h2><div id="lessons" class="lessons"></div><h3>상세 규칙</h3><div id="ruletext" style="white-space:pre-line"></div><button onclick="rules.close()">닫기</button></dialog>
 <script>
@@ -86,7 +86,48 @@ function auto(){if(phase==='place'){let open=all.filter(a=>!pieces.some(p=>p.at=
  }}
  if(best){relocate(best.p,best.m);if(best.n!=null)return install(best.n)}}if(phase==='wall')install(pick(near(moved.at).filter(n=>!walls.has(edge(moved.at,n)))))}
 function coord(a){return 'ABCDEFG'[a%7]+(1+Math.floor(a/7))}
-async function generate(prompt){let res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent($('model').value.trim())+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':$('key').value.trim()},body:JSON.stringify({contents:[{parts:[{text:prompt}]}]}),signal:AbortSignal.timeout(45000)});let data=await res.json();if(!res.ok)throw Error('HTTP '+res.status+' · '+(data.error?.message||'요청 실패').replaceAll($('key').value.trim(),'***'));let t=data.candidates?.[0]?.content?.parts?.filter(p=>p.text&&!p.thought).map(p=>p.text).join('');if(!t)throw Error(data.promptFeedback?.blockReason||data.candidates?.[0]?.finishReason||'빈 응답');return t.trim()}
+const googleModels=['gemini-4-hydrogen','gemini-4-carbon','gemini-4-argon','gemini-4-neon'];
+const services={
+ vertex:{url:'https://aiplatform.googleapis.com/v1beta1/publishers/google/models/',models:googleModels},
+ studio:{url:'https://generativelanguage.googleapis.com/v1beta/models/',models:googleModels},
+ openai:{url:'https://api.openai.com/v1/chat/completions',models:['gpt-4.1-mini','gpt-4.1']},
+ router:{url:'https://openrouter.ai/api/v1/chat/completions',models:['openai/gpt-4.1-mini']}
+};
+const storagePrefix='wallBaduk.api.';
+function loadProvider(){
+ const id=$('provider').value,list=services[id].models;
+ $('models').replaceChildren(...list.map(m=>new Option(m,m)));
+ $('model').value=localStorage.getItem(storagePrefix+id+'.model')??list[0];
+ $('key').value=localStorage.getItem(storagePrefix+id+'.key')||'';
+ $('apiResult').textContent='';
+ localStorage.setItem(storagePrefix+'provider',id);
+}
+const previous=localStorage.getItem(storagePrefix+'provider');
+$('provider').value=Object.hasOwn(services,previous)?previous:'vertex';
+loadProvider();$('provider').onchange=loadProvider;
+for(const field of ['key','model'])$(field).oninput=()=>localStorage.setItem(storagePrefix+$('provider').value+'.'+field,$(field).value);
+async function generate(prompt){
+ const id=$('provider').value,key=$('key').value.trim(),model=$('model').value.trim();
+ if(!key||!model)throw Error('API 키와 모델 ID를 입력해야 한다.');
+ const google=id==='vertex'||id==='studio';
+ const url=services[id].url+(google?encodeURIComponent(model)+':generateContent':'');
+ const auth=google?{'x-goog-api-key':key}:{Authorization:'Bearer '+key};
+ const body=google?{contents:[{role:'user',parts:[{text:prompt}]}]}:{model,messages:[{role:'user',content:prompt}]};
+ const res=await fetch(url,{method:'POST',redirect:'error',headers:{...auth,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(45000)});
+ const data=await res.json().catch(()=>({}));
+ if(!res.ok||data.error)throw Error('HTTP '+res.status+' · '+String(data.error?.message||'요청 실패').replaceAll(key,'***'));
+ const line=google?data.candidates?.[0]?.content?.parts?.filter(p=>p.text&&!p.thought).map(p=>p.text).join(''):data.choices?.[0]?.message?.content;
+ if(!line?.trim())throw Error(data.promptFeedback?.blockReason||data.candidates?.[0]?.finishReason||'빈 응답');
+ return line.trim();
+}
+$('testApi').onclick=async()=>{
+ const provider=$('provider').value,model=$('model').value;
+ $('testApi').disabled=true;$('apiResult').textContent='연결 확인 중…';
+ let message;
+ try{await generate('Reply OK.');message='연결 성공 · '+model}catch(e){message='연결 실패 · '+e.message}
+ if(provider===$('provider').value&&model===$('model').value)$('apiResult').textContent=message;
+ $('testApi').disabled=false;
+};
 function showLine(o,line){
  const p=participants[o],panel=$('voice'),avatar=document.createElement(p.img?'img':'span');
  avatar.className='avatar';avatar.style.background=colors[o];if(p.img){avatar.src=p.img;avatar.alt=''}else avatar.textContent=p.name[0];
@@ -96,7 +137,7 @@ function showLine(o,line){
 let speaking=new Set();
 async function speak(o){
  if(!o||speaking.has(o))return;
- if(!$('key').value.trim()){showLine(o,'API 설정에서 Gemini 키를 입력하면 대사를 생성한다.');return}
+ if(!$('key').value.trim()){showLine(o,'API 설정에서 공급자와 키를 설정하면 대사를 생성한다.');return}
  const id=epoch,p=participants[o];speaking.add(o);
  if(!$('voice').dataset.ready)showLine(o,'대사를 생성하는 중…');
  try{
